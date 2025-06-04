@@ -44,10 +44,10 @@
     "output_dir": "hackernews_results",
     "request_delay": 0.15,
     "db": {
-        "host": "mariadb",
-        "user": "cyberlaw",
-        "password": "cyberlawpass",
-        "database": "cyberlaw",
+        "host": "host.docker.internal",
+        "user": "wordpressuser",
+        "password": "!123Wordpress",
+        "database": "wordpress",
         "port": 3306
     },
     "post_url": "http://your-post-endpoint"

@@ -375,237 +375,52 @@ string sql_escape(MYSQL *conn, const string &str)
     return out;
 }
 
-// --- POST запрос ---
-bool send_post(const string &url, const string &article_url, const string &content)
+// --- Вставка поста в wp_posts (WordPress) ---
+void insert_wp_post(MYSQL *conn, const string &title, const string &content)
 {
-    CURL *curl = curl_easy_init();
-    if (!curl) return false;
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    Json::Value root;
-    root["url"] = article_url;
-    root["content"] = content;
-    string json = root.toStyledString();
+    // Значения по умолчанию для новых постов
+    string post_status = "draft";
+    string post_type = "post";
+    int post_author = 1; // ID автора (можно изменить)
+    string post_excerpt = "";
+    string post_name = ""; // можно сгенерировать из title
+    string guid = "";
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    CURLcode res = curl_easy_perform(curl);
-    bool ok = (res == CURLE_OK);
-    if (!ok) {
-        cerr << get_current_time() << " POST ERROR: " << curl_easy_strerror(res) << endl;
+    // Текущее время для post_date и post_date_gmt
+    time_t now = time(nullptr);
+    struct tm *ltm = gmtime(&now);
+    char date_buf[32];
+    strftime(date_buf, sizeof(date_buf), "%Y-%m-%d %H:%M:%S", ltm);
+    string post_date = date_buf;
+    string post_date_gmt = date_buf;
+
+    string esc_title = sql_escape(conn, title);
+    string esc_content = sql_escape(conn, content);
+
+    // Можно сгенерировать post_name (slug) из title (упрощённо)
+    string slug = esc_title;
+    for (auto &c : slug) {
+        if (c == ' ') c = '-';
+        else if (!isalnum(c) && c != '-') c = '\0';
     }
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    return ok;
-}
+    slug.erase(remove(slug.begin(), slug.end(), '\0'), slug.end());
 
-// --- Чтение конфига с поддержкой db и post_url ---
-ParserConfig read_config(const string &config_file)
-{
-    cout << get_current_time() << " Reading config file: " << config_file << endl;
-    ParserConfig config;
+    // guid обычно формируется как http://site/?p=<id>, но можно оставить пустым (WordPress сам обновит)
+    string q =
+        "INSERT INTO wp_posts "
+        "(post_author, post_date, post_date_gmt, post_content, post_title, post_excerpt, post_status, comment_status, ping_status, post_name, post_type) "
+        "VALUES (" +
+        to_string(post_author) + ", '" + post_date + "', '" + post_date_gmt + "', '" + esc_content + "', '" + esc_title +
+        "', '" + post_excerpt + "', '" + post_status + "', 'open', 'open', '" + slug + "', '" + post_type + "')";
 
-    ifstream file(config_file);
-    if (!file.is_open())
-    {
-        cerr << get_current_time() << " ERROR: Cannot open config file: " << config_file << endl;
-        exit(1);
-    }
-
-    Json::Value root;
-    file >> root;
-
-    for (const auto &site : root["sites"])
-    {
-        SiteConfig sc;
-        sc.url = site["url"].asString();
-        sc.link_pattern = site["link_pattern"].asString();
-        sc.content_block = site["content_block"].asString();
-        if (site.isMember("max_pages"))
-        {
-            sc.max_pages = site["max_pages"].asInt();
-        }
-        cout << get_current_time() << " Configured site: " << sc.url
-             << ", max pages: " << sc.max_pages << endl;
-        config.sites.push_back(sc);
-    }
-
-    if (root.isMember("output_dir"))
-    {
-        config.output_dir = root["output_dir"].asString();
-    }
-
-    if (root.isMember("request_delay"))
-    {
-        config.request_delay = root["request_delay"].asInt();
-    }
-    if (root.isMember("db")) {
-        const auto &db = root["db"];
-        if (db.isMember("host")) config.db.host = db["host"].asString();
-        if (db.isMember("user")) config.db.user = db["user"].asString();
-        if (db.isMember("password")) config.db.password = db["password"].asString();
-        if (db.isMember("database")) config.db.database = db["database"].asString();
-        if (db.isMember("port")) config.db.port = db["port"].asUInt();
-    }
-    if (root.isMember("post_url")) {
-        config.post_url = root["post_url"].asString();
-    }
-
-    cout << get_current_time() << " Config loaded successfully. Output directory: "
-         << config.output_dir << ", request delay: " << config.request_delay << "s" << endl;
-
-    return config;
-}
-
-vector<string> find_article_links(HtmlParser &parser, const string &pattern)
-{
-    vector<string> links;
-    if (!parser.doc)
-    {
-        cerr << get_current_time() << " ERROR: No valid document for link search" << endl;
-        return links;
-    }
-
-    cout << get_current_time() << " Searching for article links with pattern: " << pattern << endl;
-    xmlXPathContextPtr context = xmlXPathNewContext(parser.doc);
-    if (!context)
-    {
-        cerr << get_current_time() << " ERROR: Failed to create XPath context" << endl;
-        return links;
-    }
-
-    // Изменим XPath-запрос - убираем /@href в конце
-    string modified_pattern = pattern;
-    if (pattern.find("/@href") != string::npos)
-    {
-        modified_pattern = pattern.substr(0, pattern.find("/@href"));
-        cout << get_current_time() << " Modified pattern to: " << modified_pattern << endl;
-    }
-
-    xmlXPathObjectPtr result = xmlXPathEvalExpression((const xmlChar *)modified_pattern.c_str(), context);
-
-    if (result && result->nodesetval)
-    {
-        cout << get_current_time() << " Found " << result->nodesetval->nodeNr << " nodes matching pattern" << endl;
-
-        for (int i = 0; i < result->nodesetval->nodeNr; ++i)
-        {
-            xmlNodePtr node = result->nodesetval->nodeTab[i];
-            cout << get_current_time() << " Processing node #" << i + 1 << " of type " << node->type
-                 << ", name: " << node->name << endl;
-
-            // Для элемента <a> получаем атрибут href
-            if (node->type == XML_ELEMENT_NODE && strcmp((char *)node->name, "a") == 0)
-            {
-                xmlChar *href = xmlGetProp(node, (const xmlChar *)"href");
-                if (href)
-                {
-                    string link = string((char *)href);
-                    cout << get_current_time() << " Found valid link: " << link << endl;
-                    links.push_back(link);
-                    xmlFree(href);
-                }
-                else
-                {
-                    cerr << get_current_time() << " WARNING: No href found in <a> element" << endl;
-                }
-            }
-        }
-    }
-    else
-    {
-        cout << get_current_time() << " No nodes found with given pattern" << endl;
-    }
-
-    xmlXPathFreeObject(result);
-    xmlXPathFreeContext(context);
-
-    cout << get_current_time() << " Total links found: " << links.size() << endl;
-    return links;
-}
-
-string process_article(const string &base_url, const string &article_url, const string &content_pattern)
-{
-    // Если ссылка уже абсолютная - используем как есть
-    string full_url = article_url;
-
-    // Если относительная - добавляем базовый URL
-    if (article_url.find("http") != 0)
-    {
-        // Убедимся, что base_url заканчивается на /, а article_url не начинается с /
-        string base = base_url;
-        if (base.back() != '/')
-            base += '/';
-        if (!article_url.empty() && article_url.front() == '/')
-        {
-            full_url = base + article_url.substr(1);
-        }
-        else
-        {
-            full_url = base + article_url;
-        }
-    }
-
-    cout << get_current_time() << " Final article URL: " << full_url << endl;
-    string html = download_html(full_url);
-    HtmlParser parser(html);
-    if (!parser.is_valid())
-    {
-        cerr << get_current_time() << " ERROR: Failed to parse article: " << full_url << endl;
-        return "";
-    }
-
-    string content = parser.get_element_content(content_pattern);
-    cout << get_current_time() << " Extracted " << content.size() << " characters from article" << endl;
-    return content;
-}
-
-void ensure_dir_exists(const string &dir)
-{
-    cout << get_current_time() << " Checking/Creating directory: " << dir << endl;
-    string command = "mkdir -p " + dir;
-    int result = system(command.c_str());
-    if (result != 0)
-    {
-        cerr << get_current_time() << " ERROR: Failed to create directory: " << dir << endl;
-    }
-    else
-    {
-        cout << get_current_time() << " Directory ready: " << dir << endl;
+    if (mysql_query(conn, q.c_str())) {
+        cerr << get_current_time() << " ERROR: INSERT wp_posts failed: " << mysql_error(conn) << endl;
+    } else {
+        cout << get_current_time() << " New WordPress post inserted: " << esc_title << endl;
     }
 }
 
-void save_results(const string &output_dir, const string &site_host, const vector<pair<string, string>> &articles)
-{
-    ensure_dir_exists(output_dir);
-
-    string filename = output_dir + "/" + site_host + ".json";
-    cout << get_current_time() << " Saving results to: " << filename << endl;
-
-    ofstream out(filename);
-    if (!out.is_open())
-    {
-        cerr << get_current_time() << " ERROR: Failed to open output file: " << filename << endl;
-        return;
-    }
-
-    Json::Value root;
-    for (const auto &[url, content] : articles)
-    {
-        Json::Value article;
-        article["url"] = url;
-        article["content"] = content;
-        root.append(article);
-    }
-
-    out << root.toStyledString();
-    out.close();
-    cout << get_current_time() << " Successfully saved " << articles.size()
-         << " articles to " << filename << endl;
-}
-
-// --- Основная обработка сайта с БД и POST ---
+// --- Основная обработка сайта с БД и вставкой в WordPress ---
 void process_site(const SiteConfig &site, const ParserConfig &config, MYSQL *conn)
 {
     cout << get_current_time() << " ===== Starting to process site: " << site.url << " =====" << endl;
@@ -645,10 +460,11 @@ void process_site(const SiteConfig &site, const ParserConfig &config, MYSQL *con
         if (!content.empty())
         {
             articles.emplace_back(article_url, content);
-            // Отправить POST
-            if (!config.post_url.empty()) {
-                send_post(config.post_url, article_url, content);
-            }
+
+            // --- Вставка в WordPress ---
+            // В качестве заголовка используем ссылку или часть контента (можно доработать)
+            string post_title = article_url;
+            insert_wp_post(conn, post_title, content);
         }
         else
         {
@@ -720,3 +536,5 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+
+// Подключение к БД использует параметры из config.db, host берётся из config.json
