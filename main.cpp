@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <iomanip>
 #include <mysql/mysql.h> // MariaDB/MySQL C API
+#include <sys/stat.h>    // <--- добавьте эту строку
 
 using std::regex;
 using std::smatch;
@@ -420,7 +421,139 @@ void insert_wp_post(MYSQL *conn, const string &title, const string &content)
     }
 }
 
-// --- Основная обработка сайта с БД и вставкой в WordPress ---
+// --- Реализация функции find_article_links ---
+vector<string> find_article_links(HtmlParser &parser, const string &pattern)
+{
+    vector<string> links = parser.find_by_selector("a");
+    vector<string> filtered_links;
+
+    regex re(pattern);
+    for (const string &link : links)
+    {
+        if (regex_search(link, re))
+        {
+            filtered_links.push_back(link);
+        }
+    }
+
+    return filtered_links;
+}
+
+// --- Реализация функции process_article ---
+string process_article(const string &base_url, const string &article_url, const string &content_pattern)
+{
+    string html = download_html(article_url);
+    HtmlParser parser(html);
+
+    // Используем более надежный способ получения контента статьи
+    vector<string> content_blocks = parser.find_by_class(content_pattern);
+    if (content_blocks.empty())
+    {
+        cerr << get_current_time() << " ERROR: No content found for article: " << article_url << endl;
+        return "";
+    }
+
+    // Объединяем все найденные блоки контента в один
+    stringstream ss;
+    for (const string &block : content_blocks)
+    {
+        ss << block << "\n";
+    }
+
+    return ss.str();
+}
+
+// --- Реализация функции save_results ---
+void save_results(const string &output_dir, const string &site_host, const vector<pair<string, string>> &articles)
+{
+    for (const auto &[url, content] : articles)
+    {
+        // Генерируем имя файла на основе URL
+        string file_name = url;
+        replace(file_name.begin(), file_name.end(), '/', '_');
+        file_name = output_dir + "/" + file_name + ".html";
+
+        ofstream ofs(file_name);
+        if (ofs)
+        {
+            ofs << content;
+            cout << get_current_time() << " Article saved: " << file_name << endl;
+        }
+        else
+        {
+            cerr << get_current_time() << " ERROR: Failed to save article: " << file_name << endl;
+        }
+    }
+}
+
+// --- Реализация функции read_config ---
+ParserConfig read_config(const string &config_file)
+{
+    ParserConfig config;
+    ifstream ifs(config_file);
+    if (!ifs)
+    {
+        throw runtime_error("Failed to open config file: " + config_file);
+    }
+
+    Json::Value root;
+    ifs >> root;
+
+    // Чтение конфигурации сайтов
+    for (const auto &site : root["sites"])
+    {
+        SiteConfig site_config;
+        site_config.url = site["url"].asString();
+        site_config.link_pattern = site["link_pattern"].asString();
+        site_config.content_block = site["content_block"].asString();
+        site_config.max_pages = site["max_pages"].asInt();
+
+        config.sites.push_back(site_config);
+    }
+
+    // Чтение общей конфигурации парсера
+    config.output_dir = root["output_dir"].asString();
+    config.request_delay = root["request_delay"].asInt();
+
+    // Чтение конфигурации базы данных
+    const auto &db = root["db"];
+    config.db.host = db["host"].asString();
+    config.db.user = db["user"].asString();
+    config.db.password = db["password"].asString();
+    config.db.database = db["database"].asString();
+    config.db.port = db["port"].asUInt();
+
+    return config;
+}
+
+// --- Реализация функции ensure_dir_exists ---
+void ensure_dir_exists(const string &dir)
+{
+    struct stat info;
+
+    if (stat(dir.c_str(), &info) != 0)
+    {
+        cerr << get_current_time() << " ERROR: Cannot access " << dir << endl;
+        return;
+    }
+
+    if (info.st_mode & S_IFDIR)
+    {
+        cout << get_current_time() << " Directory exists: " << dir << endl;
+    }
+    else
+    {
+        cerr << get_current_time() << " ERROR: " << dir << " is not a directory" << endl;
+    }
+}
+
+// --- Прототипы функций ---
+string process_article(const string &base_url, const string &article_url, const string &content_pattern);
+void save_results(const string &output_dir, const string &site_host, const vector<pair<string, string>> &articles);
+ParserConfig read_config(const string &config_file);
+void ensure_dir_exists(const string &dir);
+void process_site(const SiteConfig &site, const ParserConfig &config, MYSQL *conn); // <--- добавьте этот прототип
+
 void process_site(const SiteConfig &site, const ParserConfig &config, MYSQL *conn)
 {
     cout << get_current_time() << " ===== Starting to process site: " << site.url << " =====" << endl;
@@ -462,7 +595,6 @@ void process_site(const SiteConfig &site, const ParserConfig &config, MYSQL *con
             articles.emplace_back(article_url, content);
 
             // --- Вставка в WordPress ---
-            // В качестве заголовка используем ссылку или часть контента (можно доработать)
             string post_title = article_url;
             insert_wp_post(conn, post_title, content);
         }

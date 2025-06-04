@@ -1,5 +1,8 @@
 FROM ubuntu:22.04
 
+WORKDIR /app
+
+
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential g++ cmake \
@@ -11,11 +14,11 @@ RUN apt-get update && \
     cron \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+RUN apt-get update && \
+    apt-get install -y g++ make curl libcurl4-openssl-dev libxml2-dev libmysqlclient-dev libjsoncpp-dev pkg-config
 
 COPY . .
 
-# Компиляция на этапе сборки контейнера
 RUN g++ -std=c++17 -o main main.cpp $(pkg-config --cflags --libs libxml-2.0) -lcurl -ljsoncpp -lmysqlclient
 
 RUN chmod +x /app/run.sh && crontab /app/crontab.txt
