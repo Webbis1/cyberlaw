@@ -1,0 +1,1 @@
+*/5 * * * * /app/run.sh >> /app/cron.log 2>&1

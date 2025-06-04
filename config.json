@@ -1,0 +1,54 @@
+{
+    "sites": [
+        {
+            "url": "https://www.infosecurity-magazine.com/news/",
+            "link_pattern": "//li[contains(@class, 'webpage-item')]/div/h2/a/@href",
+            "content_block": "//div[contains(@class, 'page-content')]",
+            "max_pages": 5,
+            "options": {
+                "absolute_links": true,
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "timeout": 10
+            }
+        },{
+            "url": "https://thehackernews.com/",
+            "link_pattern": "//a[contains(@class, 'story-link')]",
+            "content_block": "//div[@id='articlebody']",
+            "max_pages": 10,
+            "options": {
+                "absolute_links": true,
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "timeout": 10
+            }
+        },
+        {
+            "url": "https://cybersecuritynews.com/",
+            "link_pattern": "//div[contains(@class, 'td-block-span12')]/div/div[2]/h3/a/@href",
+            "content_block": "//div[contains(@class, 'td-post-content')]",
+            "max_pages": 10,
+            "options": {
+                "absolute_links": true,
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "request_headers": {
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "Referer": "https://cybersecuritynews.com/"
+                },
+                "pagination": {
+                    "type": "infinite_scroll",
+                    "scroll_delay": 3
+                }
+            }
+        }
+    ],
+    "output_dir": "hackernews_results",
+    "request_delay": 0.15,
+    "db": {
+        "host": "mariadb",
+        "user": "cyberlaw",
+        "password": "cyberlawpass",
+        "database": "cyberlaw",
+        "port": 3306
+    },
+    "post_url": "http://your-post-endpoint"
+}
