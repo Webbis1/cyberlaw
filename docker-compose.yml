@@ -4,3 +4,5 @@ services:
   cyberlaw-app:
     build: .
     command: ["cron", "-f"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
